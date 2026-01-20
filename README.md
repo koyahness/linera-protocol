@@ -147,7 +147,7 @@ as the [example applications](./examples) in this repository.
 
 ## Contributing
 
-We welcome contributions from the community! If you'd like to contribute to the Linera protocol:
+We welcome contributions from the community! If you'd like to contribute to the Linera protocol, follow the steps below:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
