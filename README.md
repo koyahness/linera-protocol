@@ -52,7 +52,7 @@ from low to high levels in the dependency graph)
 
 * [`linera-client`](https://linera-io.github.io/linera-protocol/linera_client/index.html)
   Library for writing Linera clients.  Used for the command-line
-  client and the node service in `linera-service`, as well as the Web
+  client and the node services in `linera-service`, as well as the Web
   client in [`linera-web`](https://github.com/linera-io/linera-web/).
 
 * [`linera-service`](https://linera-io.github.io/linera-protocol/linera_service/index.html)
