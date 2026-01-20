@@ -44,10 +44,10 @@ from low to high levels in the dependency graph)
   Defines the storage abstractions for the protocol on top of `linera-chain`.
 
 * [`linera-core`](https://linera-io.github.io/linera-protocol/linera_core/index.html) The
-  core Linera protocol, including client and server logic, node synchronization, etc.
+  core Linera protocol, including the client and server logic, node synchronization, etc.
 
 * [`linera-rpc`](https://linera-io.github.io/linera-protocol/linera_rpc/index.html)
-  Defines the data-type for RPC messages (currently all client &#x2194; proxy &#x2194;
+  Defines the data-types for RPC messages (currently all client &#x2194; proxy &#x2194;
   chain &#x2194; chain interactions), and track the corresponding data schemas.
 
 * [`linera-client`](https://linera-io.github.io/linera-protocol/linera_client/index.html)
