@@ -312,10 +312,10 @@ impl TestValidator {
     ///
     /// Returns the [`ChainDescription`] of the new chain.
     async fn request_new_chain_from_admin_chain(&self, owner: AccountOwner) -> ChainDescription {
-        let admin_id = self.admin_chain_id;
+        let admin_chain_id = self.admin_chain_id;
         let pinned = self.chains.pin();
         let admin_chain = pinned
-            .get(&admin_id)
+            .get(&admin_chain_id)
             .expect("Admin chain should be created when the `TestValidator` is constructed");
 
         let (epoch, _) = self.committee.lock().await.clone();
@@ -327,7 +327,7 @@ impl TestValidator {
         };
         let new_chain_config = open_chain_config.init_chain_config(epoch, epoch, epoch);
 
-        let certificate = admin_chain
+        let (certificate, _) = admin_chain
             .add_block(|block| {
                 block.with_system_operation(SystemOperation::OpenChain(open_chain_config));
             })

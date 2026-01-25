@@ -79,8 +79,8 @@ pub trait ClientContext {
 
     fn client(&self) -> &Arc<linera_core::client::Client<Self::Environment>>;
 
-    fn admin_chain(&self) -> ChainId {
-        self.client().admin_chain()
+    fn admin_chain_id(&self) -> ChainId {
+        self.client().admin_chain_id()
     }
 
     /// Gets the timing sender for benchmarking, if available.
@@ -250,7 +250,7 @@ impl<C: ClientContext + 'static> ChainListener<C> {
     pub async fn run(mut self) -> Result<impl Future<Output = Result<(), Error>>, Error> {
         let chain_ids = {
             let guard = self.context.lock().await;
-            let admin_chain_id = guard.admin_chain();
+            let admin_chain_id = guard.admin_chain_id();
             guard
                 .make_chain_client(admin_chain_id)
                 .await?
@@ -596,7 +596,12 @@ impl<C: ClientContext + 'static> ChainListener<C> {
                     match command {
                         ListenerCommand::Listen(new_chains) => {
                             debug!(?new_chains, "received command to listen to new chains");
-                            self.listen_recursively(new_chains).await?;
+                            self.listen_recursively(new_chains.clone()).await?;
+                            for chain_id in new_chains.keys() {
+                                if let Err(error) = self.update_wallet(*chain_id).await {
+                                    error!(%error, %chain_id, "error updating the wallet with a chain");
+                                }
+                            }
                         }
                         ListenerCommand::StopListening(chains) => {
                             debug!(?chains, "received command to stop listening to chains");
@@ -607,6 +612,9 @@ impl<C: ClientContext + 'static> ChainListener<C> {
                                     continue;
                                 };
                                 listening_client.stop().await;
+                                if let Err(error) = self.context.lock().await.wallet().remove(chain_id).await {
+                                    error!(%error, %chain_id, "error removing a chain from the wallet");
+                                }
                             }
                         }
                         ListenerCommand::SetMessagePolicy(policies) => {

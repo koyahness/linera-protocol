@@ -33,7 +33,7 @@ use linera_chain::{
 use linera_execution::{
     system::{EpochEventData, EPOCH_STREAM_NAME},
     Committee, ExecutionRuntimeContext as _, ExecutionStateView, Query, QueryContext, QueryOutcome,
-    ServiceRuntimeEndpoint,
+    ResourceTracker, ServiceRuntimeEndpoint,
 };
 use linera_storage::{Clock as _, ResultReadCertificates, Storage};
 use linera_views::{
@@ -951,7 +951,7 @@ where
                     .await;
                 outcome.clone()
             } else {
-                chain
+                let (verified, _resource_tracker) = chain
                     .execute_block(
                         &proposed_block,
                         local_time,
@@ -959,7 +959,8 @@ where
                         &published_blobs,
                         oracle_responses,
                     )
-                    .await?
+                    .await?;
+                verified
             };
         // We should always agree on the messages and state hash.
         ensure!(
@@ -1292,14 +1293,14 @@ where
     async fn vote_for_fallback(&mut self) -> Result<(), WorkerError> {
         let chain = &mut self.chain;
         let epoch = *chain.execution_state.system.epoch.get();
-        let Some(admin_id) = chain.execution_state.system.admin_id.get() else {
+        let Some(admin_chain_id) = chain.execution_state.system.admin_chain_id.get() else {
             return Ok(());
         };
 
         // Check if epoch e+1 exists on the admin chain and when it was created.
         let next_epoch_index = epoch.0.saturating_add(1);
         let event_id = EventId {
-            chain_id: *admin_id,
+            chain_id: *admin_chain_id,
             stream_id: StreamId::system(EPOCH_STREAM_NAME),
             index: next_epoch_index,
         };
@@ -1469,7 +1470,7 @@ where
         block: ProposedBlock,
         round: Option<u32>,
         published_blobs: &[Blob],
-    ) -> Result<(Block, ChainInfoResponse), WorkerError> {
+    ) -> Result<(Block, ChainInfoResponse, ResourceTracker), WorkerError> {
         self.initialize_and_save_if_needed().await?;
         let local_time = self.storage.clock().current_time();
         let (_, committee) = self.chain.current_committee()?;
@@ -1478,7 +1479,7 @@ where
         self.chain
             .remove_bundles_from_inboxes(block.timestamp, true, block.incoming_bundles())
             .await?;
-        let executed_block =
+        let (executed_block, resource_tracker) =
             Box::pin(self.execute_block(&block, local_time, round, published_blobs)).await?;
 
         // No need to sign: only used internally.
@@ -1493,7 +1494,7 @@ where
                 .await?;
         }
 
-        Ok((executed_block, response))
+        Ok((executed_block, response, resource_tracker))
     }
 
     /// Validates and executes a block proposed to extend this chain.
@@ -1611,8 +1612,14 @@ where
         let block = if let Some(outcome) = outcome {
             outcome.clone().with(proposal.content.block.clone())
         } else {
-            Box::pin(self.execute_block(block, local_time, round.multi_leader(), &published_blobs))
-                .await?
+            let (executed_block, _resource_tracker) = Box::pin(self.execute_block(
+                block,
+                local_time,
+                round.multi_leader(),
+                &published_blobs,
+            ))
+            .await?;
+            executed_block
         };
 
         ensure!(
@@ -1733,8 +1740,8 @@ where
         local_time: Timestamp,
         round: Option<u32>,
         published_blobs: &[Blob],
-    ) -> Result<Block, WorkerError> {
-        let outcome =
+    ) -> Result<(Block, ResourceTracker), WorkerError> {
+        let (outcome, resource_tracker) =
             Box::pin(
                 self.chain
                     .execute_block(block, local_time, round, published_blobs, None),
@@ -1751,7 +1758,7 @@ where
             )
             .await,
         );
-        Ok(block)
+        Ok((block, resource_tracker))
     }
 
     /// Initializes and saves the current chain if it is not active yet.

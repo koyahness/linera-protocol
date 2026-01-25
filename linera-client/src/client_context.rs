@@ -14,7 +14,7 @@ use linera_base::{
 };
 use linera_chain::{manager::LockingBlock, types::ConfirmedBlockCertificate};
 use linera_core::{
-    client::{ChainClient, Client, ListeningMode},
+    client::{chain_client, ChainClient, Client, ListeningMode},
     data_types::{ChainInfo, ChainInfoQuery, ClientOutcome},
     join_set_ext::JoinSet,
     node::ValidatorNode,
@@ -36,7 +36,6 @@ use {
         data_types::{Amount, BlockHeight},
         identifiers::{ApplicationId, BlobType},
     },
-    linera_core::client::chain_client,
     linera_execution::{
         system::{OpenChainConfig, SystemOperation},
         Operation,
@@ -316,7 +315,7 @@ where
                 signer,
                 wallet,
             },
-            genesis_config.admin_id(),
+            genesis_config.admin_chain_id(),
             options.long_lived_services,
             chain_modes,
             name,
@@ -359,8 +358,8 @@ impl<Env: Environment> ClientContext<Env> {
     }
 
     /// Returns the ID of the admin chain.
-    pub fn admin_chain(&self) -> ChainId {
-        self.client.admin_chain()
+    pub fn admin_chain_id(&self) -> ChainId {
+        self.client.admin_chain_id()
     }
 
     /// Retrieve the default account. Current this is the common account of the default
@@ -376,11 +375,11 @@ impl<Env: Environment> ClientContext<Env> {
     }
 
     pub async fn first_non_admin_chain(&self) -> Result<ChainId, Error> {
-        let admin_id = self.admin_chain();
+        let admin_chain_id = self.admin_chain_id();
         std::pin::pin!(self
             .wallet()
             .chain_ids()
-            .try_filter(|chain_id| futures::future::ready(*chain_id != admin_id)))
+            .try_filter(|chain_id| futures::future::ready(*chain_id != admin_chain_id)))
         .next()
         .await
         .expect("No non-admin chain specified in wallet with no non-admin chain")
@@ -544,8 +543,12 @@ impl<Env: Environment> ClientContext<Env> {
         // Try applying f optimistically without validator notifications. Return if committed.
         let result = f(client).await;
         self.update_wallet_from_client(client).await?;
-        if let ClientOutcome::Committed(t) = result? {
-            return Ok(t);
+        match result? {
+            ClientOutcome::Committed(t) => return Ok(t),
+            ClientOutcome::Conflict(certificate) => {
+                return Err(chain_client::Error::Conflict(certificate.hash()).into());
+            }
+            ClientOutcome::WaitForTimeout(_) => {}
         }
 
         // Start listening for notifications, so we learn about new rounds and blocks.
@@ -558,6 +561,9 @@ impl<Env: Environment> ClientContext<Env> {
             self.update_wallet_from_client(client).await?;
             let timeout = match result? {
                 ClientOutcome::Committed(t) => return Ok(t),
+                ClientOutcome::Conflict(certificate) => {
+                    return Err(chain_client::Error::Conflict(certificate.hash()).into());
+                }
                 ClientOutcome::WaitForTimeout(timeout) => timeout,
             };
             // Otherwise wait and try again in the next round.

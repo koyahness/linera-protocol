@@ -47,7 +47,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    data_types::{ChainInfo, ChainInfoQuery, ChainInfoResponse, RoundTimeout},
+    data_types::{ChainInfo, ChainInfoQuery, ChainInfoResponse},
     environment::Environment,
     local_node::{LocalChainInfoExt as _, LocalNodeClient, LocalNodeError},
     node::{CrossChainMessageDelivery, NodeError, ValidatorNodeProvider as _},
@@ -237,7 +237,7 @@ pub struct Client<Env: Environment> {
     /// Manages the requests sent to validator nodes.
     requests_scheduler: RequestsScheduler<Env>,
     /// The admin chain ID.
-    admin_id: ChainId,
+    admin_chain_id: ChainId,
     /// Chains that should be tracked by the client, along with their listening mode.
     /// The presence of a chain in this map means it is tracked by the local node.
     chain_modes: Arc<RwLock<BTreeMap<ChainId, ListeningMode>>>,
@@ -255,7 +255,7 @@ impl<Env: Environment> Client<Env> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         environment: Env,
-        admin_id: ChainId,
+        admin_chain_id: ChainId,
         long_lived_services: bool,
         chain_modes: impl IntoIterator<Item = (ChainId, ListeningMode)>,
         name: impl Into<String>,
@@ -287,7 +287,7 @@ impl<Env: Environment> Client<Env> {
             local_node,
             requests_scheduler,
             chains: papaya::HashMap::new(),
-            admin_id,
+            admin_chain_id,
             chain_modes,
             notifier: Arc::new(ChannelNotifier::default()),
             options,
@@ -295,8 +295,8 @@ impl<Env: Environment> Client<Env> {
     }
 
     /// Returns the chain ID of the admin chain.
-    pub fn admin_chain(&self) -> ChainId {
-        self.admin_id
+    pub fn admin_chain_id(&self) -> ChainId {
+        self.admin_chain_id
     }
 
     /// Returns the storage client used by this client's local node.
@@ -415,7 +415,7 @@ impl<Env: Environment> Client<Env> {
             Ok(info) => Ok(info),
             Err(LocalNodeError::BlobsNotFound(blob_ids)) => {
                 // Make sure the admin chain is up to date.
-                self.synchronize_chain_state(self.admin_id).await?;
+                self.synchronize_chain_state(self.admin_chain_id).await?;
                 // If the chain is missing then the error is a WorkerError
                 // and so a BlobsNotFound
                 self.update_local_node_with_blobs_from(blob_ids, validators)
@@ -623,13 +623,13 @@ impl<Env: Environment> Client<Env> {
     async fn admin_committees(
         &self,
     ) -> Result<(Epoch, BTreeMap<Epoch, Committee>), LocalNodeError> {
-        let info = self.chain_info_with_committees(self.admin_id).await?;
+        let info = self.chain_info_with_committees(self.admin_chain_id).await?;
         Ok((info.epoch, info.into_committees()?))
     }
 
     /// Obtains the committee for the latest epoch on the admin chain.
     pub async fn admin_committee(&self) -> Result<(Epoch, Committee), LocalNodeError> {
-        let info = self.chain_info_with_committees(self.admin_id).await?;
+        let info = self.chain_info_with_committees(self.admin_chain_id).await?;
         Ok((info.epoch, info.into_current_committee()?))
     }
 
@@ -670,7 +670,7 @@ impl<Env: Environment> Client<Env> {
             return Ok(bcs::from_bytes(blob.bytes())?);
         };
         // Recover history from the current validators, according to the admin chain.
-        self.synchronize_chain_state(self.admin_id).await?;
+        self.synchronize_chain_state(self.admin_chain_id).await?;
         let nodes = self.validator_nodes().await?;
         let blob = self
             .update_local_node_with_blobs_from(vec![chain_desc_id], &nodes)
@@ -814,7 +814,7 @@ impl<Env: Environment> Client<Env> {
                 let mut updater = ValidatorUpdater {
                     remote_node,
                     client: self.clone(),
-                    admin_id: self.admin_id,
+                    admin_chain_id: self.admin_chain_id,
                 };
                 let certificate = latest_certificate.clone();
                 Box::pin(async move {
@@ -850,7 +850,7 @@ impl<Env: Environment> Client<Env> {
                 let mut updater = ValidatorUpdater {
                     remote_node,
                     client: self.clone(),
-                    admin_id: self.admin_id,
+                    admin_chain_id: self.admin_chain_id,
                 };
                 let action = action.clone();
                 Box::pin(async move { updater.send_chain_update(action).await })
@@ -1619,7 +1619,7 @@ impl<Env: Environment> Client<Env> {
                     .await?;
                 continue; // We found the missing blob: retry.
             }
-            if let Ok((block, _)) = &result {
+            if let Ok((block, _, _)) = &result {
                 let hash = CryptoHash::new(block);
                 let notification = Notification {
                     chain_id: block.header.chain_id,
@@ -1630,7 +1630,8 @@ impl<Env: Environment> Client<Env> {
                 };
                 self.notifier.notify(&[notification]);
             }
-            return Ok(result?);
+            let (block, response, _resource_tracker) = result?;
+            return Ok((block, response));
         }
     }
 }
@@ -1669,19 +1670,6 @@ where
         };
     }
     Err(err(errors))
-}
-
-/// The outcome of trying to commit a list of incoming messages and operations to the chain.
-#[derive(Debug)]
-enum ExecuteBlockOutcome {
-    /// A block with the messages and operations was committed.
-    Executed(ConfirmedBlockCertificate),
-    /// A different block was already proposed and got committed. Check whether the messages and
-    /// operations are still suitable, and try again at the next block height.
-    Conflict(ConfirmedBlockCertificate),
-    /// We are not the round leader and cannot do anything. Try again at the specified time or
-    /// or whenever the round or block height changes.
-    WaitForTimeout(RoundTimeout),
 }
 
 /// Wrapper for `AbortHandle` that aborts when its dropped.
